@@ -99,6 +99,11 @@ export default defineStore("platforms", {
     get(platformId: number) {
       return this.allPlatforms.find((p) => p.id === platformId);
     },
+    // A rom carries `platform_slug`, not the id, so cover sizing looks up
+    // its platform by slug.
+    getBySlug(slug: string) {
+      return this.allPlatforms.find((p) => p.slug === slug);
+    },
     reset() {
       this.allPlatforms = [] as Platform[];
       this.filesystemPlatforms = [] as Platform[];

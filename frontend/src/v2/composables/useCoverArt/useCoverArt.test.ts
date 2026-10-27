@@ -6,6 +6,7 @@ import {
   computeCoverArt,
   coverRatio,
   isBoxartStyle,
+  parseCssRatio,
   resolveBoxartStyle,
 } from "./index";
 
@@ -49,6 +50,51 @@ describe("coverRatio", () => {
     expect(coverRatio("physical_path")).toBe(1);
     expect(coverRatio("miximage_path")).toBe(1);
     expect(coverRatio("miximage_v2_path")).toBe(1);
+  });
+
+  it("lets a platform reshape its box art", () => {
+    // A SNES box is landscape; the default 2/3 crops nearly half its width.
+    expect(coverRatio("cover_path", 1.41)).toBe(1.41);
+  });
+
+  it("keeps the artwork's own shape for every other style", () => {
+    // A disc is round and a mix image is a screenshot montage: neither
+    // changes shape with the console.
+    expect(coverRatio("physical_path", 1.41)).toBe(1);
+    expect(coverRatio("miximage_path", 1.41)).toBe(1);
+    expect(coverRatio("box3d_path", 1.41)).toBeCloseTo(3 / 4);
+  });
+
+  it("falls back to the style ratio when the platform has none", () => {
+    expect(coverRatio("cover_path", null)).toBeCloseTo(2 / 3);
+    expect(coverRatio("cover_path", undefined)).toBeCloseTo(2 / 3);
+  });
+});
+
+describe("parseCssRatio", () => {
+  it("reads the shapes the backend stores", () => {
+    expect(parseCssRatio("2 / 3")).toBeCloseTo(2 / 3);
+    expect(parseCssRatio("2/3")).toBeCloseTo(2 / 3);
+    expect(parseCssRatio("1.41")).toBe(1.41);
+    expect(parseCssRatio("140 / 188")).toBeCloseTo(140 / 188);
+  });
+
+  it("returns null rather than NaN for anything unusable", () => {
+    // The backend validates on write, so these only come from a stale or
+    // hand-edited row. NaN in a style attribute collapses the card.
+    for (const value of [
+      "",
+      null,
+      undefined,
+      "0 / 3",
+      "2 / 0",
+      "-2 / 3",
+      "abc",
+      "2 / 3 / 4",
+      "calc(2/3)",
+    ]) {
+      expect(parseCssRatio(value)).toBeNull();
+    }
   });
 });
 
@@ -411,3 +457,29 @@ describe("computeCoverArt: coverSrcset", () => {
     ).toBeNull();
   });
 });
+
+
+describe("computeCoverArt platform ratio", () => {
+  const opts = { resourcesPath: RES, supportsWebp: false };
+
+  it("applies the platform ratio to box art", () => {
+    const art = computeCoverArt(
+      rom({ path_cover_large: "covers/snes.png" }),
+      "cover_path",
+      { ...opts, platformRatio: 1.41 },
+    );
+    expect(art.ratio).toBe(1.41);
+    // Box art still fills its box: only the shape of the box changed.
+    expect(art.objectFit).toBe("cover");
+  });
+
+  it("ignores it for an alt-art style", () => {
+    const art = computeCoverArt(
+      rom({ ss_metadata: { physical_path: "ss/disc.png" } } as Partial<SimpleRom>),
+      "physical_path",
+      { ...opts, platformRatio: 1.41 },
+    );
+    expect(art.ratio).toBe(1);
+  });
+});
+
