@@ -1,0 +1,158 @@
+# casa-build — construye la imagen que corre el NAS desde la rama `casa`.
+#
+# Tags publicados en ghcr.io/paulorichards/romm:
+#   5.4.1-casa.N   ← el que fija nas-gitops
+#   casa           ← flotante, para probar
+# 5.4.1 sale de .casa/base (el release de upstream debajo de casa) y N es el
+# número de corrida, siempre creciente: Renovate ordena por él.
+#
+# Sólo linux/amd64: el NAS es un J3455. Sin despliegue automático: el stack se
+# actualiza a mano desde nas-gitops (ver stacks/romm/README.md).
+name: casa-build
+
+on:
+  push:
+    branches: [casa]
+  workflow_dispatch:
+
+concurrency:
+  group: casa-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Los mismos tests que el pytest.yml de upstream, sólo con MariaDB porque es
+  # lo que corre el NAS. Si un parche nuestro rompe algo, no sale imagen.
+  pytest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      mariadb:
+        image: mariadb:13.0.2
+        ports:
+          - 3306
+        env:
+          MYSQL_USER: romm_test
+          MYSQL_PASSWORD: passwd
+          MYSQL_DATABASE: romm_test
+          MYSQL_ROOT_PASSWORD: passwd
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=2s --health-retries=3 --health-start-period=30s
+      valkey:
+        image: valkey/valkey:9.0.6
+        ports:
+          - 6379
+        options: >-
+          --health-cmd="redis-cli ping" --health-interval=5s --health-timeout=2s --health-retries=3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up the backend
+        uses: ./.github/actions/setup-backend
+        with:
+          sync-args: --extra test
+          apt-packages: 7zip
+
+      # Igual que upstream: el usuario de test crea las bases por worker de
+      # xdist, así que necesita el GRANT sobre el namespace `romm_test%`.
+      - name: Initiate MariaDB database
+        env:
+          MARIADB_PORT: ${{ job.services.mariadb.ports['3306'] }}
+        run: |
+          mysql --host 127.0.0.1 --port "$MARIADB_PORT" -uroot -ppasswd -e "GRANT ALL PRIVILEGES ON \`romm\_test%\`.* TO 'romm_test'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES;"
+
+      - name: Run python tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: ${{ job.services.mariadb.ports['3306'] }}
+          ROMM_DB_DRIVER: mariadb
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: ${{ job.services.valkey.ports['6379'] }}
+          HYPOTHESIS_PROFILE: ci
+        run: |
+          cd backend
+          uv run pytest -n 4 --maxfail=10 -q .
+
+  frontend-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      # Los tests de Storybook necesitan navegador; acá sólo los unitarios.
+      - run: npx vitest run --exclude "**/*.stories.*"
+        working-directory: frontend
+
+  build:
+    needs: [pytest, frontend-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Versión
+        id: v
+        run: |
+          version="$(cat .casa/base)"
+          echo "tag=${version}-casa.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          file: docker/Dockerfile
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.v.outputs.image }}:${{ steps.v.outputs.tag }}
+            ${{ steps.v.outputs.image }}:casa
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=casa
+          cache-to: type=gha,mode=max,scope=casa
+
+      - name: Resumen
+        run: echo "Publicado \`${{ steps.v.outputs.image }}:${{ steps.v.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  avisar-falla:
+    needs: [pytest, frontend-test, build]
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh issue create \
+            --title "casa-build falló en $(echo "$GITHUB_SHA" | cut -c1-7)" \
+            --body "No salió imagen nueva; el NAS sigue en la anterior. Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
