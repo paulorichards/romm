@@ -15,6 +15,7 @@ export type PlatformSchema = {
     libretro_slug: (string | null);
     custom_name?: (string | null);
     description?: (string | null);
+    aspect_ratio: string;
     igdb_id?: (number | null);
     sgdb_id?: (number | null);
     moby_id?: (number | null);

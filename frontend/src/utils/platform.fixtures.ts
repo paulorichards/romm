@@ -13,6 +13,7 @@ export function platformFixture(overrides: Partial<Platform> = {}): Platform {
     moby_slug: null,
     hltb_slug: null,
     libretro_slug: null,
+    aspect_ratio: "2 / 3",
     created_at: "",
     updated_at: "",
     fs_size_bytes: 0,
