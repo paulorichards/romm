@@ -92,8 +92,11 @@ jobs:
         working-directory: frontend
       - run: npm run typecheck
         working-directory: frontend
-      # Los tests de Storybook necesitan navegador; acá sólo los unitarios.
-      - run: npx vitest run --exclude "**/*.stories.*"
+      # Igual que el frontend.yml de upstream: `npm test` incluye los tests de
+      # Storybook y de accesibilidad, que corren en Chromium.
+      - run: npx playwright install --only-shell chromium
+        working-directory: frontend
+      - run: npm test
         working-directory: frontend
 
   build:

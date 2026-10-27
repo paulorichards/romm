@@ -4,6 +4,7 @@ from handler.metadata.platform_names import (
     platform_abbreviation,
     platform_alternative_names,
 )
+from models.platform import DEFAULT_COVER_ASPECT_RATIO
 
 from .base import BaseModel, UTCDatetime
 from .firmware import FirmwareSchema
@@ -23,7 +24,7 @@ class PlatformSchema(BaseModel):
     libretro_slug: str | None
     custom_name: str | None = None
     description: str | None = None
-    aspect_ratio: str
+    aspect_ratio: str = DEFAULT_COVER_ASPECT_RATIO
     igdb_id: int | None = None
     sgdb_id: int | None = None
     moby_id: int | None = None
@@ -72,3 +73,9 @@ class PlatformSchema(BaseModel):
     @field_validator("firmware")
     def sort_files(cls, v: list[FirmwareSchema]) -> list[FirmwareSchema]:
         return sorted(v, key=lambda x: x.file_name)
+
+    # `get_platform_metadata` validates an unpersisted Platform, where the
+    # column's server default has not run yet and the attribute reads None.
+    @field_validator("aspect_ratio", mode="before")
+    def default_aspect_ratio(cls, v: str | None) -> str:
+        return v or DEFAULT_COVER_ASPECT_RATIO
