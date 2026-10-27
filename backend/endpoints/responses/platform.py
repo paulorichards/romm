@@ -23,6 +23,7 @@ class PlatformSchema(BaseModel):
     libretro_slug: str | None
     custom_name: str | None = None
     description: str | None = None
+    aspect_ratio: str
     igdb_id: int | None = None
     sgdb_id: int | None = None
     moby_id: int | None = None

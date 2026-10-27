@@ -2,7 +2,12 @@ from unittest.mock import patch
 
 from fastapi import status
 
-from models.platform import CUSTOM_NAME_MAX_LENGTH, DESCRIPTION_MAX_LENGTH
+from models.platform import (
+    COVER_ASPECT_RATIO_MAX_LENGTH,
+    CUSTOM_NAME_MAX_LENGTH,
+    DEFAULT_COVER_ASPECT_RATIO,
+    DESCRIPTION_MAX_LENGTH,
+)
 
 
 def test_get_platforms(client, access_token, platform):
@@ -212,3 +217,53 @@ def test_firmware_count_matches_the_rows_it_ships(
     assert body["firmware_count"] == 2
     assert len(body["firmware"]) == 2
     assert sum(1 for f in body["firmware"] if f["missing_from_fs"]) == 1
+
+
+def test_platform_ships_its_cover_aspect_ratio(client, access_token, platform):
+    """The column existed since 0027 but never reached the API, so the frontend
+    had no way to size a platform's covers."""
+    response = client.get(
+        f"/api/platforms/{platform.id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["aspect_ratio"] == DEFAULT_COVER_ASPECT_RATIO
+
+
+def test_update_platform_aspect_ratio(client, access_token, platform):
+    response = client.put(
+        f"/api/platforms/{platform.id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"aspect_ratio": "1.41"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["aspect_ratio"] == "1.41"
+
+
+def test_update_platform_aspect_ratio_rejects_css_injection(
+    client, access_token, platform
+):
+    response = client.put(
+        f"/api/platforms/{platform.id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"aspect_ratio": "2/3;color:red"},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    response = client.get(
+        f"/api/platforms/{platform.id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response.json()["aspect_ratio"] == DEFAULT_COVER_ASPECT_RATIO
+
+
+def test_update_platform_aspect_ratio_rejects_a_too_long_value(
+    client, access_token, platform
+):
+    response = client.put(
+        f"/api/platforms/{platform.id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"aspect_ratio": "1" * (COVER_ASPECT_RATIO_MAX_LENGTH + 1)},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+

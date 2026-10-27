@@ -35,6 +35,7 @@ import {
 } from "vue";
 import { useUISettings } from "@/composables/useUISettings";
 import { toWebpUrl, useWebpSupport } from "@/composables/useWebpSupport";
+import storePlatforms from "@/stores/platforms";
 import type { SimpleRom } from "@/stores/roms";
 import {
   FRONTEND_RESOURCES_PATH,
@@ -75,9 +76,8 @@ export type CoverArtRom = Pick<
 >;
 
 /** Canonical width/height ratio per style: mirrors v1's
- *  `galleryView.getAspectRatio`. The ratio is purely style-driven (a
- *  rom missing its alt art still letterboxes the fallback cover in the
- *  style's box, matching v1). */
+ *  `galleryView.getAspectRatio`. A rom missing its alt art still
+ *  letterboxes the fallback cover in the style's box, matching v1. */
 export const COVER_RATIOS: Record<BoxartStyle, number> = {
   cover_path: 2 / 3,
   box3d_path: 3 / 4,
@@ -85,6 +85,18 @@ export const COVER_RATIOS: Record<BoxartStyle, number> = {
   miximage_path: 1,
   miximage_v2_path: 1,
 };
+
+/** A platform's `aspect_ratio` as a number, or null when it is unset or
+ *  not a positive CSS ratio. The backend validates on write; this keeps a
+ *  stale or hand-edited row from producing `NaN` in a style attribute. */
+export function parseCssRatio(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const sides = value.split("/");
+  if (sides.length > 2) return null;
+  const numbers = sides.map((side) => Number(side.trim()));
+  if (numbers.some((n) => !Number.isFinite(n) || n <= 0)) return null;
+  return numbers.length === 2 ? numbers[0]! / numbers[1]! : numbers[0]!;
+}
 
 export function isBoxartStyle(value: unknown): value is BoxartStyle {
   return (
@@ -96,7 +108,14 @@ export function isBoxartStyle(value: unknown): value is BoxartStyle {
   );
 }
 
-export function coverRatio(style: BoxartStyle): number {
+/** Box art is the only style a platform can reshape: a disc, a cartridge
+ *  and a mix image keep the shape of the artwork itself, which does not
+ *  vary by console. A SNES box is landscape, a Super Famicom box is tall. */
+export function coverRatio(
+  style: BoxartStyle,
+  platformRatio?: number | null,
+): number {
+  if (style === "cover_path" && platformRatio) return platformRatio;
   return COVER_RATIOS[style];
 }
 
@@ -201,6 +220,9 @@ interface ComputeOptions {
    *  blobs, external provider URLs). Treated as final: no webp rewrite,
    *  no alt-art swap. */
   coverSrc?: string | null | undefined;
+  /** The rom platform's own box-art ratio, already parsed. Only applies
+   *  to `cover_path`; see {@link coverRatio}. */
+  platformRatio?: number | null | undefined;
 }
 
 /** Pure resolution core: no Vue, no stores. Exported for unit tests and
@@ -210,7 +232,7 @@ export function computeCoverArt(
   style: BoxartStyle,
   opts: ComputeOptions,
 ): CoverArtDescriptor {
-  const ratio = coverRatio(style);
+  const ratio = coverRatio(style, opts.platformRatio);
   // Treat an empty string as "no override": a preview field that hasn't
   // been set yet (e.g. EditRomDialog opens `imagePreviewUrl = ""`) must
   // still resolve the rom's own cover, not blank out to the placeholder.
@@ -305,6 +327,12 @@ export function useCoverArt(
   const { disableAnimations } = useUISettings();
   const contextStyle = useBoxartStyle(options.context);
   const { supportsWebp } = useWebpSupport();
+  const platforms = storePlatforms();
+
+  const platformRatio = computed<number | null>(() => {
+    const slug = toValue(rom)?.platform_slug;
+    return slug ? parseCssRatio(platforms.getBySlug(slug)?.aspect_ratio) : null;
+  });
 
   const coverSrc = computed<string | undefined>(() => {
     const v = options.coverSrc ? toValue(options.coverSrc) : undefined;
@@ -341,7 +369,7 @@ export function useCoverArt(
         fallbackUrl: null,
         hasArtwork: !!src,
         isAltArt: false,
-        ratio: coverRatio(s),
+        ratio: coverRatio(s, platformRatio.value),
         objectFit: s === "cover_path" ? "cover" : "contain",
         animateCD: false,
         animateCartridge: false,
@@ -352,6 +380,7 @@ export function useCoverArt(
       resourcesPath: FRONTEND_RESOURCES_PATH,
       supportsWebp: effectiveWebp.value,
       coverSrc: coverSrc.value,
+      platformRatio: platformRatio.value,
     });
   });
 
