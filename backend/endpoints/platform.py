@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import Body
+from fastapi import Body, HTTPException
 from fastapi import Path as PathVar
 from fastapi import Query, Request, status
 
@@ -25,8 +25,10 @@ from logger.logger import log
 from models.audit_event import AuditAction
 from models.permission import PermAction, PermEntity
 from models.platform import (
+    COVER_ASPECT_RATIO_MAX_LENGTH,
     CUSTOM_NAME_MAX_LENGTH,
     DESCRIPTION_MAX_LENGTH,
+    is_valid_cover_aspect_ratio,
 )
 from utils.platforms import get_filesystem_platforms, get_supported_platforms
 from utils.router import APIRouter
@@ -157,6 +159,14 @@ async def update_platform(
             description="Custom platform description.",
         ),
     ] = None,
+    aspect_ratio: Annotated[
+        str | None,
+        Body(
+            embed=True,
+            max_length=COVER_ASPECT_RATIO_MAX_LENGTH,
+            description="CSS aspect ratio for this platform's covers, e.g. `2 / 3`.",
+        ),
+    ] = None,
 ) -> PlatformSchema:
     """Update a platform."""
 
@@ -165,7 +175,20 @@ async def update_platform(
         raise PlatformNotFoundInDatabaseException(id)
     assert_platform_visible(request, platform_db)
 
-    submitted = {"custom_name": custom_name, "description": description}
+    if aspect_ratio is not None and not is_valid_cover_aspect_ratio(aspect_ratio):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "aspect_ratio must be a CSS ratio with positive sides, "
+                "e.g. '2 / 3' or '1.41'"
+            ),
+        )
+
+    submitted = {
+        "custom_name": custom_name,
+        "description": description,
+        "aspect_ratio": aspect_ratio,
+    }
     changed = changed_fields(
         platform_db, {k: v for k, v in submitted.items() if v is not None}, submitted
     )
@@ -173,6 +196,8 @@ async def update_platform(
         platform_db.custom_name = custom_name
     if description is not None:
         platform_db.description = description
+    if aspect_ratio is not None:
+        platform_db.aspect_ratio = aspect_ratio
     platform_db = db_platform_handler.add_platform(platform_db)
     if changed:
         record(

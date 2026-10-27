@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Final
 
 from sqlalchemy import Index, Integer, String, Text, func, select
@@ -32,6 +33,20 @@ PLATFORM_MATCH_FIELDS: Final = (
 # Bounds for the user-authored fields
 CUSTOM_NAME_MAX_LENGTH = 400
 DESCRIPTION_MAX_LENGTH = 65535  # TEXT
+COVER_ASPECT_RATIO_MAX_LENGTH = 10
+
+# The value reaches the DOM as `style="aspect-ratio: <value>"`, so only a CSS
+# ratio is allowed: "2 / 3", "1.41" or "7/5". Anything else could inject CSS.
+COVER_ASPECT_RATIO_PATTERN: Final = re.compile(
+    r"^\d{1,4}(\.\d{1,3})?(\s*/\s*\d{1,4}(\.\d{1,3})?)?$"
+)
+
+
+def is_valid_cover_aspect_ratio(value: str) -> bool:
+    """Whether `value` is a CSS ratio with both sides greater than zero."""
+    if not COVER_ASPECT_RATIO_PATTERN.match(value or ""):
+        return False
+    return all(float(side) > 0 for side in value.split("/"))
 
 
 class Platform(BaseModel):
@@ -73,7 +88,8 @@ class Platform(BaseModel):
     )
 
     aspect_ratio: Mapped[str] = mapped_column(
-        String(length=10), server_default=DEFAULT_COVER_ASPECT_RATIO
+        String(length=COVER_ASPECT_RATIO_MAX_LENGTH),
+        server_default=DEFAULT_COVER_ASPECT_RATIO,
     )
 
     # Temp column to store the old slug from the migration
